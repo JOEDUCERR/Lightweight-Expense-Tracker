@@ -1,0 +1,101 @@
+# Expense Tracker — Agent Instructions
+## Stack
+- Backend: Python 3.11+, FastAPI, SQLAlchemy 2.x, SQLite (backend/app.db), Pydantic v2,
+  PyJWT, bcrypt (use the bcrypt package directly, NOT passlib)
+- Frontend: React + Vite, JavaScript (no TypeScript), react-router-dom, plain fetch.
+  No UI library, no Tailwind.
+- Tests: pytest + FastAPI TestClient using the conftest `client` fixture
+  (fresh in-memory SQLite with StaticPool; tests must NOT touch backend/app.db)
+## Layout
+backend/app/{main.py,database.py,models.py,schemas.py,auth.py,routers/}
+backend/tests/
+frontend/src/{api.js,constants.js,App.jsx,pages/,components/}
+backups/            <- timestamped SQLite backups (never committed to Git)
+API.md   <- source of truth for every endpoint
+PLAN.md  <- phase checklist
+## Commands
+- Backend: cd backend && python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && uvicorn app.main:app --port 8100 --host 0.0.0.0
+- Tests: cd backend && source .venv/bin/activate && pytest -q
+- Frontend: cd frontend && npm install && npm run dev -- --port 5173 --host
+- Frontend build: cd frontend && npm run build
+## Rules
+- Ports 8000, 8001, 3000 and 80 are used by other services. Use only 8100 and 5173.
+- All backend routes are prefixed /api. Vite proxies /api to http://127.0.0.1:8100.
+- API.md is the contract. Never change an endpoint without updating API.md first.
+- Run the tests after every change. A phase is not done until pytest is green.
+- Keep files under ~200 lines. One router per resource.
+- Do not add dependencies that are not already listed without asking.
+- No placeholder, stub or TODO code. Every endpoint must be fully implemented.
+- Never delete/recreate backend/app.db for schema changes; use ensure_schema()
+  in database.py to ALTER TABLE non-destructively.
+- Do not reset user data without explicit user authorization; back up first
+  (see backups/).
+
+## Project-Specific Gotchas (learned during repairs)
+- Login contract: POST /api/auth/login takes JSON {username, password}; the
+  `username` field accepts the registered email OR username
+  (routers/auth.py LoginRequest + auth.py get_user_by_identifier).
+- Collection expense routes are /api/expenses/ (trailing slash). Calling
+  /api/expenses triggers a 307 redirect whose Location is cross-origin through
+  the Vite proxy; browsers then STRIP the Authorization header -> 401.
+  Frontend collection calls must use '/api/expenses/'.
+- Empty-string filter query params (e.g. min_amount=&end_date=) fail FastAPI
+  validation with 422. frontend/src/api.js skips empty values before
+  serializing; keep it that way.
+- frontend/src/api.js formatApiError() turns FastAPI validation error ARRAYS
+  into readable messages ("Username: Field required"). Never stringify error
+  detail objects (produces "[object Object]"). Network failures map to a
+  readable message too.
+- ExpenseCreate.amount uses Field(gt=0): zero/negative amounts are rejected.
+  401 responses have a STRING detail; 422 responses have an ARRAY detail.
+- CORS: app/main.py pins allow_origins to http://20.20.20.152:5173,
+  localhost:5173, 127.0.0.1:5173 - update if the LAN IP changes. The Vite
+  proxy makes requests same-origin in normal dev use; CORS only matters for
+  direct browser-to-8100 calls.
+- httpx is pinned to 0.27.2 in requirements.txt: 0.28+ removed the `app=` kwarg
+  that starlette 0.27's TestClient passes to httpx.Client.
+- Tests use the conftest client fixture (in-memory SQLite + dependency
+  override). A module-level TestClient(app) in test files defeats isolation
+  and hits the real app.db - do not reintroduce that pattern.
+- Categories for the Add Expense form come from frontend/src/constants.js
+  (EXPENSE_CATEGORIES). The backend accepts any category string; keep the
+  dropdown list as the single source to avoid inconsistent category names.
+- Payment method is NOT a field in the model - do not add form fields for it.
+
+## Work Completed (chronological)
+1. CORS + proxy repair (2026-11-02): added CORSMiddleware to app/main.py;
+   switched frontend to relative '/api' URLs so the Vite proxy is used.
+   Fixed browser "OPTIONS /api/auth/register 405" and NetworkError.
+2. Login contract repair (2026-11-02/03): replaced the form-encoded
+   OAuth2PasswordRequestForm mismatch with a consistent JSON LoginRequest;
+   login now accepts email or username; fixed frontend login() sending
+   FormData with a JSON content-type header (the 422 root cause); readable
+   error rendering (no more "[object Object],[object Object]").
+3. Protected-route fix: frontend expense list/create use trailing-slash
+   paths, eliminating the cross-origin 307 redirect that stripped the
+   Authorization header (401 "Not authenticated").
+4. Non-destructive schema migration: ensure_schema() adds missing columns
+   (category, expense_date) to an existing app.db at startup.
+5. Test suite repair: pinned httpx==0.27.2, switched tests to JSON login,
+   wired tests to the conftest in-memory client fixture, added StaticPool.
+   Suite is green (21 tests).
+6. Authorized DB reset (2026-11-03): full SQLite backup to
+   backups/app.db-20261103-020800.bak (contains the prior 10 users + 1
+   expense), verified valid, then users/expenses tables emptied; schema and
+   indexes preserved; app.db file kept.
+7. Manual expense entry (2026-11-03): + Add Expense button and modal
+   (AddExpenseModal.jsx / AddExpenseModal.css) with title, amount>0
+   validation (client + backend Field(gt=0)), category dropdown, date
+   defaulting to today, optional description; instant dashboard refresh
+   (list, totals, monthly summary) with a success message.
+8. Empty-filter 422 fix in api.js query-param serialization.
+9. Documentation: README.md and backend/API.md updated (auth flow, expense
+   fields, startup schema migration, backup location).
+
+## Known Environment Issues
+- AGENTS.md is owned by root; agents cannot edit it directly. This file is
+  the staged replacement: apply it with
+  `sudo cp AGENTS.md.new AGENTS.md`.
+- Two integration-test accounts remain in app.db (usernames
+  janedoe1793651991350 and bobby1793651992538, *.example.com emails).
+  They don't block new registrations and can be deleted on request.

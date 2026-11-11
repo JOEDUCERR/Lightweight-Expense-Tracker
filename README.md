@@ -2,6 +2,8 @@
 
 A full-stack expense tracking application built with Python FastAPI and React/Vite.
 
+Project made to test local AI system using "Qwen3.8:27B".
+
 ## Project Structure
 
 ```
